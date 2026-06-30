@@ -23,6 +23,7 @@ stub), so the web admin is the only runnable service. Setup is just `pip install
 ### Non-obvious gotchas
 - `tgcrypto` (a `requirements.txt` dependency) compiles a C extension and needs the `python3-dev` system
   headers; these are pre-installed in the VM image, so `pip install` succeeds without extra steps.
-- Some API endpoints have pre-existing bugs unrelated to setup — e.g. `POST /api/platform/giftcodes`
-  returns HTTP 500 because `create_gift_codes()` does not accept the `code` kwarg the route passes. Do not
-  treat such failures as environment problems.
+- `days`/`day_items` rows are normally populated by the (not-yet-implemented) userbot archive hook, so the
+  `/api/platform/days/*` endpoints have no data until you seed via `research_platform.archive_index`
+  (`get_or_create_day` + `add_day_item`). The userbot (Pyrogram) and delivery bots (aiogram) need real
+  Telegram credentials/tokens and cannot be exercised in this environment.
