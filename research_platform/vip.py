@@ -68,6 +68,10 @@ def user_is_vip(user_id: int) -> bool:
             return False
         from datetime import datetime
         try:
-            return datetime.fromisoformat(until) > now_vn().replace(tzinfo=None)
+            expires = datetime.fromisoformat(until)
         except ValueError:
             return False
+        now = now_vn()
+        if expires.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        return expires > now
