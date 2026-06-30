@@ -203,7 +203,9 @@ async def platform_giftcodes(_=Depends(_auth)):
 @app.post("/api/platform/giftcodes")
 async def platform_giftcodes_create(body: GiftCodeIn, _=Depends(_auth)):
     from research_platform.giftcode import create_gift_codes
-    codes = create_gift_codes(**body.model_dump())
+    data = body.model_dump()
+    custom_code = data.pop("code", None)
+    codes = create_gift_codes(custom_code=custom_code, **data)
     return {"ok": True, "codes": codes}
 
 
