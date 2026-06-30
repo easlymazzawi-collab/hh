@@ -5,16 +5,20 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+VN = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
+def now_vn() -> datetime:
+    return datetime.now(VN)
 
 
 def today_vn() -> date:
-    return datetime.now(VN_TZ).date()
+    return now_vn().date()
 
 
 def date_vn_str(d: date | None = None) -> str:
     d = d or today_vn()
-    return d.isoformat()
+    return d.strftime("%Y-%m-%d")
 
 
 def topic_label_vn(d: date | None = None) -> str:
@@ -22,7 +26,7 @@ def topic_label_vn(d: date | None = None) -> str:
     return d.strftime("%d-%m-%Y")
 
 
-def parse_day_label(text: str) -> date | None:
+def parse_day_input(text: str) -> date | None:
     text = (text or "").strip()
     for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
         try:

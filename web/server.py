@@ -1,247 +1,46 @@
-"""FastAPI web dashboard — cấu hình, SSE real-time, bot token, lịch auto."""
+"""FastAPI — Research Platform web admin (viết lại từ đầu)."""
 
-import asyncio
-import json
+from __future__ import annotations
+
 import os
-import time
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
-from core.config_store import (
-    load_auto_config,
-    load_inventory,
-    save_auto_config,
-    topic_key,
-    upsert_topic_source,
-)
-from core.import_legacy import analyze_uploads, apply_import, import_from_workspace, scan_workspace, sync_topic_sources_from_map_file
-from core.all_config import merge_all_task, merge_plain_task
-from core.branch_map import (
-    apply_start_link_flexible as branch_apply_start_link,
-    delete_topic_entry as branch_delete_topic,
-    list_topic_entries,
-    rebuild_map_file,
-    sync_map_file_to_config,
-    update_topic_mapping_cmd as branch_update_mapping,
-    upsert_topic_mapping as branch_upsert_mapping,
-)
-from core.map_config import (
-    apply_start_link_flexible,
-    apply_start_link_to_topic,
-    clear_start_link,
-    delete_topic_entry,
-    sync_topic_to_map_file,
-    update_topic_mapping_cmd,
-    upsert_topic_mapping,
-)
-from core.runtime import append_log, get_runtime
-from core.scheduler import compute_next_run_ts
-from core.bot_notify import send_bot_notify
-from core.settings import api_ready, web_token, system_armed, set_system_armed
-from core.channel_store import (
-    BRANCH_ADS,
-    BRANCH_PLAIN,
-    add_folder_link,
-    gen_topic_map,
-    load_channels,
-    load_folders,
-    load_topic_map_text,
-    rewrite_channels_file,
-    save_topic_map_text,
-    set_channel_alias,
-)
-from core.web_actions import action_labels, list_pending_actions, queue_action
+from core.config_store import load_auto_config, save_auto_config
+from research_platform.db import init_db
 
 WEB_DIR = os.path.join(os.path.dirname(__file__), "static")
+app = FastAPI(title="UpBain Research Platform", version="2.0")
 
-app = FastAPI(title="UpBain Control", version="27")
+
+def _web_token() -> str:
+    cfg = load_auto_config()
+    return (cfg.get("platform") or {}).get("web_token") or ""
 
 
-def _check_token(authorization: str | None, x_token: str | None, query_token: str | None = None):
-    token = web_token()
+def _auth(
+    authorization: str | None = Header(default=None),
+    x_token: str | None = Header(default=None),
+) -> bool:
+    token = _web_token()
     if not token:
         return True
-    got = (
-        (authorization or "").replace("Bearer ", "").strip()
-        or (x_token or "").strip()
-        or (query_token or "").strip()
-    )
+    got = (authorization or "").replace("Bearer ", "").strip() or (x_token or "").strip()
     if got != token:
         raise HTTPException(401, "Unauthorized")
     return True
 
 
-def _auth(authorization: str | None = Header(default=None), x_token: str | None = Header(default=None)):
-    _check_token(authorization, x_token)
-    return True
-
-
-class TopicSourceIn(BaseModel):
-    src_chat_id: int
-    topic_id: int
-    topic_title: str = ""
-    target_media_override: int | None = None
-    target_ads_override: int | None = None
-    media_per_round: int | None = None
-    default_cpa: int | None = None
-    default_mode: str = "normal"
-    xepbai_mode: str | None = "inherit"
-    xepbai_whitelist_cmds: list[str] = []
-    use_ads: bool | None = None
-    channels_no_ads: list[str] = []
-    mapped_cmds: list[str] = []
-    map_post_limits: dict[str, int] = Field(default_factory=dict)
-    map_media_limits: dict[str, int] = Field(default_factory=dict)
-    target_posts_override: int | None = None
-    enabled: bool = True
-    pin_mode: str = "latest"
-    start_link: str = ""
-    start_msg_id: int | None = None
-    cursor_msg_id: int | None = None
-
-
-class AllTaskPatchIn(BaseModel):
-    enabled: bool | None = None
-    source_link: str | None = None
-    start_link: str | None = None
-    selected_channel_ids: list[int] | None = None
-    run_after_regular: bool | None = None
-
-
-class PlainTaskPatchIn(BaseModel):
-    enabled: bool | None = None
-    selected_channel_ids: list[int] | None = None
-    skip_last_posts: int | None = None
-    included_msg_ids: list[int] | None = None
-
-
-class TopicMapLimitsIn(BaseModel):
-    map_post_limits: dict[str, int] = Field(default_factory=dict)
-    map_media_limits: dict[str, int] = Field(default_factory=dict)
-
-
-class TopicPostLimitsIn(BaseModel):
-    map_post_limits: dict[str, int] = Field(default_factory=dict)
-    map_media_limits: dict[str, int] = Field(default_factory=dict)
-
-
-class TopicMapAddIn(BaseModel):
-    topic_title: str
-    channel_cmd: str
-    post_count: int | None = None
-    media_count: int | None = None
-    src_chat_id: int | None = None
-    topic_id: int | None = None
-
-
-class TopicMapCmdIn(BaseModel):
-    topic_title: str = ""
-    old_cmd: str
-    new_cmd: str
-    post_count: int | None = None
-    media_count: int | None = None
-
-
-class AliasIn(BaseModel):
-    alias: str = ""
-
-
-class PlainFolderIn(BaseModel):
-    link: str
-
-
-class PlainTopicMapIn(BaseModel):
-    content: str
-
-
-class AllTaskIn(BaseModel):
-    enabled: bool = False
-    source_chat_id: int | None = None
-    source_topic_id: int | None = None
-    source_title: str = ""
-    selected_channel_ids: list[int] = []
-    run_after_regular: bool = False
-    use_ads: bool = False
-    xep_cpa: int = 1
-    xep_mode: str = "normal"
-    target_media_override: int | None = None
-    start_link: str = ""
-    start_msg_id: int | None = None
-    pin_mode: str = "latest"
-    cursor_msg_id: int | None = None
-
-
-class StartLinkIn(BaseModel):
-    link: str
-
-
-class TopicStartLinkIn(BaseModel):
-    link: str
-    src_chat_id: int | None = None
-    topic_id: int | None = None
-    topic_title: str = ""
-
-
-class GlobalIn(BaseModel):
-    xepbai_off_default_cpa: int = 1
-    xepbai_off_default_mode: str = "normal"
-    xepbai_mode: str = "off"
-    xepbai_whitelist_cmds: list[str] = []
-    low_media_warn_threshold: int = 50
-    auto_run_enabled: bool = True
-    require_full_batch: bool = True
-    require_up_confirm: bool = True
-    confirm_cancel_before_sec: int = 900
-    stock_poll_interval_sec: int = 300
-    system_armed: bool | None = None
-    web_host: str = "0.0.0.0"
-    web_port: int = 8080
-    web_token: str = ""
-
-
-class ScheduleIn(BaseModel):
-    enabled: bool = False
-    times: list[str] = Field(default_factory=lambda: ["08:00", "20:00"])
-    timezone: str = "Asia/Ho_Chi_Minh"
-    run_all_topics: bool = True
-    run_all_task_after: bool = True
-
-
-class TelegramIn(BaseModel):
-    api_id: int | None = None
-    api_hash: str = ""
-    intermediate_chat: int | None = None
-    ads_chat: int | None = None
-    bot_token: str = ""
-    pin_bot_token: str = ""
-    notify_chat_id: int | None = None
-
-
-class PlatformBotIn(BaseModel):
-    token: str = ""
-    username: str = ""
-    source_forum_id: int | None = None
-    source_topic_id: int | None = None
-    catalog_topic_id: int | None = None
-    branch: str = "ads"
-    enabled: bool = True
-    publish_channels: bool = True
-    archive_index: bool = True
-    bot_delivery: bool = True
-    queue_order: int = 0
-
-
-class PlatformIn(BaseModel):
+class PlatformPatch(BaseModel):
     enabled: bool | None = None
     publish_channels: bool | None = None
     archive_index: bool | None = None
     bot_delivery: bool | None = None
     channel_first: bool | None = None
     delivery_delay_sec: float | None = None
-    orchestrator_running: bool | None = None
     require_vip_for_archive: bool | None = None
     admin_forum_id: int | None = None
     admin_zip_topic_id: int | None = None
@@ -256,17 +55,17 @@ class PlatformIn(BaseModel):
     backup_interval_hours: int | None = None
     backup_keep_days: int | None = None
     share_event: dict | None = None
-    bot: PlatformBotIn | None = None
-    bots: list[PlatformBotIn] | None = None
+    bots: list[dict] | None = None
+    web_token: str | None = None
 
 
 class VipPlanIn(BaseModel):
-    plan_type: str
-    name: str
-    stars_price: int = 0
+    plan_type: str | None = None
+    name: str | None = None
+    stars_price: int | None = None
     duration_days: int | None = None
-    enabled: bool = True
-    sort_order: int = 0
+    enabled: int | None = None
+    sort_order: int | None = None
 
 
 class VipGrantIn(BaseModel):
@@ -275,9 +74,9 @@ class VipGrantIn(BaseModel):
 
 
 class GiftCodeIn(BaseModel):
-    plan_id: int
-    count: int = 1
-    prefix: str = ""
+    plan_id: int = 1
+    count: int = 5
+    prefix: str = "VIP"
     max_uses: int = 1
     expires_at: str | None = None
     code: str | None = None
@@ -290,775 +89,35 @@ class AdsContractIn(BaseModel):
     active: bool = True
 
 
-def _repair_imported_data(cfg: dict) -> dict:
-    """Sửa dữ liệu import: chuẩn hóa kênh + sync topic_map → web config."""
-    if not load_channels(BRANCH_ADS) and os.path.isfile("channels.json"):
-        rewrite_channels_file(BRANCH_ADS)
-    if not (cfg.get("topic_sources") or {}) and os.path.isfile("topic_map.txt"):
-        sync_topic_sources_from_map_file()
-        cfg = load_auto_config()
-    if not (cfg.get("plain_topic_sources") or {}) and os.path.isfile("plain_topic_map.txt"):
-        sync_map_file_to_config(BRANCH_PLAIN)
-        cfg = load_auto_config()
-    return cfg
-
-
-def _snapshot() -> dict[str, Any]:
-    cfg = load_auto_config()
-    cfg = _repair_imported_data(cfg)
-    sch = cfg.get("global", {}).get("schedule") or {}
-    rt = get_runtime()
-    next_ts = compute_next_run_ts(
-        sch.get("times") or [],
-        sch.get("timezone") or "Asia/Ho_Chi_Minh",
-    ) if sch.get("enabled") else 0
-    g = cfg.get("global", {})
-    safe_global = {k: v for k, v in g.items() if k not in ("api_hash", "bot_token", "pin_bot_token")}
-    safe_global["has_api_hash"] = bool(g.get("api_hash"))
-    safe_global["has_bot_token"] = bool(g.get("bot_token"))
-    safe_global["has_pin_bot_token"] = bool(g.get("pin_bot_token") or g.get("bot_token"))
-    channels = load_channels(BRANCH_ADS)
-    folders = load_folders(BRANCH_ADS)
-    plain_channels = load_channels(BRANCH_PLAIN)
-    plain_folders = load_folders(BRANCH_PLAIN)
-    plain_topic_map = ""
-    try:
-        plain_topic_map = load_topic_map_text(BRANCH_PLAIN)
-    except Exception:
-        pass
-    all_task = cfg.get("all_task") or {}
-    plain_task = cfg.get("plain_task") or {}
-    plat = cfg.get("platform") or {}
+def _mask_platform(plat: dict) -> dict:
     from research_platform.config import list_bots_config, mask_bots_for_api
 
-    safe_plat = {k: v for k, v in plat.items() if k not in ("bot", "bots")}
-    safe_plat["bots"] = mask_bots_for_api(list_bots_config(plat))
-    legacy = dict(plat.get("bot") or {})
-    if legacy.get("token"):
-        legacy["has_token"] = True
-        legacy["token"] = ""
-    else:
-        legacy["has_token"] = bool(legacy.get("token"))
-    safe_plat["bot"] = legacy
-    platform_days: list = []
-    bot_status_list: list = []
-    try:
-        from research_platform.archive_index import list_days, sync_all_bots_from_config
-        from research_platform.bot_manager import bot_status
-
-        if plat.get("enabled"):
-            sync_all_bots_from_config(plat)
-            platform_days = list_days(limit=30)
-            bot_status_list = bot_status()
-    except Exception:
-        pass
-    return {
-        "config": {**cfg, "global": safe_global, "platform": safe_plat},
-        "inventory": load_inventory(),
-        "runtime": {
-            **rt,
-            "next_run_at": next_ts or rt.get("next_run_at", 0),
-            "waiting_topics": rt.get("waiting_topics") or {},
-            "pending_up": rt.get("pending_up") or {},
-            "all_batch_preview": rt.get("all_batch_preview"),
-        },
-        "channels": channels,
-        "folders": folders,
-        "plain_channels": plain_channels,
-        "plain_folders": plain_folders,
-        "plain_topic_map": plain_topic_map,
-        "meta": {
-            "channel_count": len(channels),
-            "plain_channel_count": len(plain_channels),
-            "folder_count": len(folders),
-            "plain_folder_count": len(plain_folders),
-            "topic_count": len(cfg.get("topic_sources") or {}),
-            "plain_topic_count": len(cfg.get("plain_topic_sources") or {}),
-            "userbot_ready": api_ready(),
-            "system_armed": system_armed(),
-            "pending_actions": len(list_pending_actions()),
-            "all_task_enabled": bool(all_task.get("enabled")),
-            "all_task_configured": bool(
-                all_task.get("source_chat_id") and (
-                    all_task.get("selected_channel_ids") or plain_task.get("selected_channel_ids")
-                )
-            ),
-            "plain_task_enabled": bool(plain_task.get("enabled")),
-            "web_token_required": bool(web_token()),
-            "platform_enabled": bool(plat.get("enabled")),
-        },
-        "platform_days": platform_days,
-        "platform_bot_status": bot_status_list,
-        "ts": int(time.time()),
-    }
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    path = os.path.join(WEB_DIR, "index.html")
-    with open(path, "r", encoding="utf-8") as f:
-        body = f.read()
-    return Response(
-        content=body,
-        media_type="text/html; charset=utf-8",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-        },
-    )
-
-
-@app.get("/api/stream")
-async def api_stream(
-    request: Request,
-    token: str | None = None,
-    authorization: str | None = Header(default=None),
-    x_token: str | None = Header(default=None),
-):
-    _check_token(authorization, x_token, token)
-    """SSE — push snapshot mỗi 5s (chỉ khi dữ liệu đổi)."""
-
-    async def gen():
-        last_sig = ""
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                snap = _snapshot()
-                sig = json.dumps(snap, sort_keys=True, default=str)
-                if sig != last_sig:
-                    last_sig = sig
-                    yield f"data: {sig}\n\n"
-                else:
-                    yield ": keepalive\n\n"
-            except Exception as e:
-                err = json.dumps({"error": str(e), "ts": int(time.time())})
-                yield f"data: {err}\n\n"
-            await asyncio.sleep(5)
-
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.get("/api/config")
-async def api_config(_=Depends(_auth)):
-    return _snapshot()["config"]
-
-
-@app.get("/api/status")
-async def api_status(_=Depends(_auth)):
-    return _snapshot()["runtime"]
-
-
-@app.patch("/api/global")
-async def patch_global(body: GlobalIn, _=Depends(_auth)):
-    cfg = load_auto_config()
-    data = body.model_dump(exclude_none=True)
-    if "system_armed" in data:
-        set_system_armed(bool(data.pop("system_armed")))
-    cfg["global"].update(data)
-    save_auto_config(cfg)
-    return {**cfg["global"], "system_armed": system_armed()}
-
-
-@app.post("/api/system/start")
-async def api_system_start(_=Depends(_auth)):
-    set_system_armed(True)
-    action = queue_action("run_full_cycle")
-    append_log("info", "▶ START — arm system + full cycle")
-    await send_bot_notify(
-        "▶ <b>START</b> — bắt đầu full cycle\n"
-        "Bot sẽ gửi link + tên topic khi chạy từng map.",
-        parse_mode="HTML",
-    )
-    return {
-        "ok": True,
-        "system_armed": True,
-        "action": action,
-        "message": "Đã START — bot sẽ thông báo tiến trình + link topic",
-    }
-
-
-@app.post("/api/system/stop")
-async def api_system_stop(_=Depends(_auth)):
-    set_system_armed(False)
-    append_log("info", "⏹ STOP — tắt auto + lịch")
-    await send_bot_notify("⏹ <b>STOP</b> — tắt auto + lịch (tool vẫn online)", parse_mode="HTML")
-    return {
-        "ok": True,
-        "system_armed": False,
-        "message": "Đã STOP — tool online nhưng không chạy auto/lịch",
-    }
-
-
-@app.get("/api/system/status")
-async def api_system_status(_=Depends(_auth)):
-    return {"system_armed": system_armed(), "userbot_ready": api_ready()}
-
-
-@app.patch("/api/telegram")
-async def patch_telegram(body: TelegramIn, _=Depends(_auth)):
-    cfg = load_auto_config()
-    g = cfg["global"]
-    if body.api_id is not None:
-        g["api_id"] = body.api_id
-    if body.api_hash:
-        g["api_hash"] = body.api_hash
-    if body.intermediate_chat is not None:
-        g["intermediate_chat"] = body.intermediate_chat
-    if body.ads_chat is not None:
-        g["ads_chat"] = body.ads_chat
-    if body.bot_token:
-        g["bot_token"] = body.bot_token
-    if body.pin_bot_token:
-        g["pin_bot_token"] = body.pin_bot_token
-    if body.notify_chat_id is not None:
-        g["notify_chat_id"] = body.notify_chat_id
-    save_auto_config(cfg)
-    return {
-        "api_id": g.get("api_id"),
-        "intermediate_chat": g.get("intermediate_chat"),
-        "ads_chat": g.get("ads_chat"),
-        "notify_chat_id": g.get("notify_chat_id"),
-        "has_api_hash": bool(g.get("api_hash")),
-        "has_bot_token": bool(g.get("bot_token")),
-        "has_pin_bot_token": bool(g.get("pin_bot_token") or g.get("bot_token")),
-    }
-
-
-@app.get("/api/schedule")
-async def get_schedule(_=Depends(_auth)):
-    return load_auto_config().get("global", {}).get("schedule", {})
-
-
-@app.patch("/api/schedule")
-async def patch_schedule(body: ScheduleIn, _=Depends(_auth)):
-    cfg = load_auto_config()
-    cfg["global"]["schedule"] = body.model_dump()
-    save_auto_config(cfg)
-    sch = cfg["global"]["schedule"]
-    next_ts = compute_next_run_ts(sch.get("times") or [], sch.get("timezone") or "Asia/Ho_Chi_Minh")
-    return {**sch, "next_run_at": next_ts}
-
-
-@app.get("/api/inventory")
-async def api_inventory(_=Depends(_auth)):
-    return load_inventory()
-
-
-@app.get("/api/topics")
-async def api_topics(_=Depends(_auth)):
-    cfg = load_auto_config()
-    return list(cfg.get("topic_sources", {}).values())
-
-
-@app.post("/api/topics/map")
-async def add_topic_map(body: TopicMapAddIn, _=Depends(_auth)):
-    try:
-        entry = upsert_topic_mapping(
-            topic_title=body.topic_title,
-            channel_cmd=body.channel_cmd,
-            post_count=body.post_count,
-            media_count=body.media_count,
-            src_chat_id=body.src_chat_id,
-            topic_id=body.topic_id,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log("info", f"Thêm map {body.topic_title} → /{body.channel_cmd.lstrip('/')}")
-    return {"ok": True, "entry": entry, "message": f"✓ {body.topic_title} → /{body.channel_cmd.lstrip('/')}"}
-
-
-@app.patch("/api/topics/{src_chat_id}/{topic_id}/mapping")
-async def patch_topic_mapping(
-    src_chat_id: int, topic_id: int, body: TopicMapCmdIn, _=Depends(_auth),
-):
-    try:
-        entry = update_topic_mapping_cmd(
-            src_chat_id=src_chat_id,
-            topic_id=topic_id,
-            topic_title=body.topic_title,
-            old_cmd=body.old_cmd,
-            new_cmd=body.new_cmd,
-            post_count=body.post_count,
-            media_count=body.media_count,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log("info", f"Sửa map /{body.old_cmd} → /{body.new_cmd.lstrip('/')}")
-    return entry
-
-
-@app.post("/api/topics")
-async def post_topic(body: TopicSourceIn, _=Depends(_auth)):
-    from core.map_limits import normalize_post_limits, normalize_media_limits
-    data = body.model_dump()
-    if data.get("map_post_limits"):
-        data["map_post_limits"] = normalize_post_limits(data["map_post_limits"])
-    if data.get("map_media_limits"):
-        data["map_media_limits"] = normalize_media_limits(data["map_media_limits"])
-    entry = upsert_topic_source(body.src_chat_id, body.topic_id, data)
-    sync_topic_to_map_file(entry)
-    return entry
-
-
-@app.patch("/api/topics/{src_chat_id}/{topic_id}/map-limits")
-async def patch_topic_map_limits(
-    src_chat_id: int, topic_id: int, body: TopicMapLimitsIn, _=Depends(_auth),
-):
-    from core.map_limits import normalize_exclusive_limits
-    posts, media = normalize_exclusive_limits(body.map_post_limits, body.map_media_limits)
-    patch: dict = {"map_post_limits": posts, "map_media_limits": media}
-    entry = upsert_topic_source(src_chat_id, topic_id, patch)
-    sync_topic_to_map_file(entry)
-    title = entry.get("topic_title") or f"{src_chat_id}:{topic_id}"
-    append_log("info", f"Map limits {title}: media={patch.get('map_media_limits')} bài={patch.get('map_post_limits')}")
-    return entry
-
-
-@app.patch("/api/topics/{src_chat_id}/{topic_id}/post-limits")
-async def patch_topic_post_limits(
-    src_chat_id: int, topic_id: int, body: TopicPostLimitsIn, _=Depends(_auth),
-):
-    from core.map_limits import normalize_post_limits, normalize_media_limits
-    patch: dict = {"map_post_limits": normalize_post_limits(body.map_post_limits)}
-    if body.map_media_limits:
-        patch["map_media_limits"] = normalize_media_limits(body.map_media_limits)
-    entry = upsert_topic_source(src_chat_id, topic_id, patch)
-    sync_topic_to_map_file(entry)
-    title = entry.get("topic_title") or f"{src_chat_id}:{topic_id}"
-    append_log("info", f"Số bài/map {title}: {patch.get('map_post_limits')}")
-    return entry
-
-
-@app.post("/api/topics/start-link")
-async def post_topic_start_link_flexible(body: TopicStartLinkIn, _=Depends(_auth)):
-    try:
-        entry = apply_start_link_flexible(
-            body.link,
-            src_chat_id=body.src_chat_id,
-            topic_id=body.topic_id,
-            topic_title=body.topic_title or None,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log(
-        "info",
-        f"Set start link {entry.get('topic_title') or entry.get('src_chat_id')} → msg {entry.get('start_msg_id')}",
-    )
-    return entry
-
-
-@app.post("/api/topics/{src_chat_id}/{topic_id}/start-link")
-async def post_topic_start_link(src_chat_id: int, topic_id: int, body: StartLinkIn, _=Depends(_auth)):
-    try:
-        entry = apply_start_link_to_topic(src_chat_id, topic_id, body.link)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log("info", f"Set start link {src_chat_id}:{topic_id} → msg {entry.get('start_msg_id')}")
-    return entry
-
-
-@app.delete("/api/topics/{src_chat_id}/{topic_id}/start-link")
-async def delete_topic_start_link(src_chat_id: int, topic_id: int, _=Depends(_auth)):
-    return clear_start_link(src_chat_id, topic_id)
-
-
-@app.delete("/api/topics/{src_chat_id}/{topic_id}")
-async def delete_topic(
-    src_chat_id: int,
-    topic_id: int,
-    topic_title: str | None = None,
-    _=Depends(_auth),
-):
-    ok = delete_topic_entry(
-        src_chat_id=src_chat_id,
-        topic_id=topic_id,
-        topic_title=topic_title or "",
-    )
-    if not ok:
-        raise HTTPException(404, "Không tìm thấy topic")
-    append_log("info", f"Xóa map topic {topic_title or f'{src_chat_id}:{topic_id}'}")
-    return {"ok": True}
-
-
-# ── Plain branch topic map (Up bài — song song nhánh ads) ──
-
-@app.get("/api/plain/topics")
-async def api_plain_topics(_=Depends(_auth)):
-    return list_topic_entries(BRANCH_PLAIN)
-
-
-@app.post("/api/plain/topics/map")
-async def add_plain_topic_map(body: TopicMapAddIn, _=Depends(_auth)):
-    try:
-        entry = branch_upsert_mapping(
-            branch=BRANCH_PLAIN,
-            topic_title=body.topic_title,
-            channel_cmd=body.channel_cmd,
-            post_count=body.post_count,
-            media_count=body.media_count,
-            src_chat_id=body.src_chat_id,
-            topic_id=body.topic_id,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log("info", f"[Up bài] map {body.topic_title} → /{body.channel_cmd.lstrip('/')}")
-    return {"ok": True, "entry": entry, "message": f"✓ Up bài: {body.topic_title} → /{body.channel_cmd.lstrip('/')}"}
-
-
-@app.patch("/api/plain/topics/{src_chat_id}/{topic_id}/mapping")
-async def patch_plain_topic_mapping(
-    src_chat_id: int, topic_id: int, body: TopicMapCmdIn, _=Depends(_auth),
-):
-    try:
-        entry = branch_update_mapping(
-            branch=BRANCH_PLAIN,
-            src_chat_id=src_chat_id,
-            topic_id=topic_id,
-            topic_title=body.topic_title,
-            old_cmd=body.old_cmd,
-            new_cmd=body.new_cmd,
-            post_count=body.post_count,
-            media_count=body.media_count,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return entry
-
-
-@app.patch("/api/plain/topics/{src_chat_id}/{topic_id}/map-limits")
-async def patch_plain_topic_map_limits(
-    src_chat_id: int, topic_id: int, body: TopicMapLimitsIn, _=Depends(_auth),
-):
-    from core.map_limits import normalize_exclusive_limits
-    from core.branch_map import sources_key
-
-    cfg = load_auto_config()
-    key = topic_key(src_chat_id, topic_id)
-    sk = sources_key(BRANCH_PLAIN)
-    entry = cfg.get(sk, {}).get(key)
-    if not entry:
-        raise HTTPException(404, "Không tìm thấy topic Up bài")
-    entry = dict(entry)
-    posts, media = normalize_exclusive_limits(body.map_post_limits, body.map_media_limits)
-    entry["map_post_limits"] = posts
-    entry["map_media_limits"] = media
-    cfg[sk][key] = entry
-    save_auto_config(cfg)
-    rebuild_map_file(BRANCH_PLAIN)
-    return entry
-
-
-@app.post("/api/plain/topics/start-link")
-async def post_plain_topic_start_link(body: TopicStartLinkIn, _=Depends(_auth)):
-    try:
-        entry = branch_apply_start_link(
-            body.link,
-            branch=BRANCH_PLAIN,
-            src_chat_id=body.src_chat_id,
-            topic_id=body.topic_id,
-            topic_title=body.topic_title or None,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log("info", f"[Up bài] link {entry.get('topic_title')} → msg {entry.get('start_msg_id')}")
-    return entry
-
-
-@app.delete("/api/plain/topics/{src_chat_id}/{topic_id}")
-async def delete_plain_topic(
-    src_chat_id: int,
-    topic_id: int,
-    topic_title: str | None = None,
-    _=Depends(_auth),
-):
-    ok = branch_delete_topic(
-        branch=BRANCH_PLAIN,
-        src_chat_id=src_chat_id,
-        topic_id=topic_id,
-        topic_title=topic_title or "",
-    )
-    if not ok:
-        raise HTTPException(404, "Không tìm thấy topic Up bài")
-    append_log("info", f"[Up bài] xóa map {topic_title or f'{src_chat_id}:{topic_id}'}")
-    return {"ok": True}
-
-
-@app.get("/api/all-task")
-async def get_all_task(_=Depends(_auth)):
-    return load_auto_config().get("all_task", {})
-
-
-@app.patch("/api/all-task")
-async def patch_all_task(body: AllTaskPatchIn, _=Depends(_auth)):
-    patch = body.model_dump(exclude_none=True)
-    if "source_link" in patch and "start_link" not in patch:
-        patch["start_link"] = patch.pop("source_link")
-    elif "source_link" in patch:
-        patch["start_link"] = patch.get("source_link") or patch.get("start_link")
-        patch.pop("source_link", None)
-    try:
-        data = merge_all_task(patch)
-    except ValueError as e:
-        append_log("error", f"/all link lỗi: {e}")
-        raise HTTPException(400, str(e))
-    link_saved = "start_link" in patch
-    if link_saved and data.get("source_chat_id"):
-        tid = data.get("source_topic_id") or 0
-        loc = f"{data['source_chat_id']}" + (f":{tid}" if tid else " (supergroup)")
-        append_log(
-            "info",
-            f"/all lưu link → {loc} (msg {data.get('start_msg_id') or '—'})",
-        )
-    elif "enabled" in patch:
-        append_log("info", f"/all {'bật' if data.get('enabled') else 'tắt'}")
-    elif patch.get("selected_channel_ids") is not None:
-        append_log("info", f"/all chọn {len(data.get('selected_channel_ids') or [])} kênh đích")
-    msg = None
-    if link_saved:
-        tid = data.get("source_topic_id") or 0
-        loc = f"{data['source_chat_id']}" + (f":{tid}" if tid else "")
-        msg = (
-            f"✓ Đã lưu nguồn {loc or data['source_chat_id']} "
-            "— userbot quét batch trong ~2s"
-        )
-    return {**data, "message": msg}
-
-
-@app.post("/api/all-task")
-async def post_all_task(body: AllTaskIn, _=Depends(_auth)):
-    patch = body.model_dump()
-    if patch.get("start_link"):
-        patch["source_link"] = patch["start_link"]
-    return merge_all_task(patch)
-
-
-@app.get("/api/plain-task")
-async def get_plain_task(_=Depends(_auth)):
-    return load_auto_config().get("plain_task", {})
-
-
-@app.patch("/api/plain-task")
-async def patch_plain_task(body: PlainTaskPatchIn, _=Depends(_auth)):
-    data = merge_plain_task(body.model_dump(exclude_none=True))
-    append_log("info", f"Up bài {'bật' if data.get('enabled') else 'tắt'} — {len(data.get('selected_channel_ids') or [])} kênh")
-    return data
-
-
-@app.get("/api/channels")
-async def api_channels(_=Depends(_auth)):
-    return load_channels(BRANCH_ADS)
-
-
-@app.patch("/api/channels/{channel_id}/alias")
-async def patch_channel_alias(channel_id: int, body: AliasIn, _=Depends(_auth)):
-    try:
-        ch = set_channel_alias(channel_id, body.alias, BRANCH_ADS)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    append_log("info", f"Alias kênh {channel_id} → {body.alias or '(xóa)'}")
-    return ch
-
-
-@app.get("/api/plain/channels")
-async def api_plain_channels(_=Depends(_auth)):
-    return load_channels(BRANCH_PLAIN)
-
-
-@app.patch("/api/plain/channels/{channel_id}/alias")
-async def patch_plain_channel_alias(channel_id: int, body: AliasIn, _=Depends(_auth)):
-    try:
-        ch = set_channel_alias(channel_id, body.alias, BRANCH_PLAIN)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    append_log("info", f"Alias Up bài {channel_id} → {body.alias or '(xóa)'}")
-    return ch
-
-
-@app.get("/api/plain/folders")
-async def api_plain_folders(_=Depends(_auth)):
-    return load_folders(BRANCH_PLAIN)
-
-
-@app.post("/api/plain/folders")
-async def post_plain_folder(body: PlainFolderIn, _=Depends(_auth)):
-    try:
-        fd = add_folder_link(body.link, BRANCH_PLAIN)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log("info", f"Thêm folder Up bài: {fd['slug']}")
-    action = queue_action("sync_plain_folders")
-    return {"ok": True, "folder": fd, "action": action, "message": "Đã lưu folder — userbot sync trong ~2s"}
-
-
-@app.get("/api/plain/topic-map")
-async def get_plain_topic_map(_=Depends(_auth)):
-    return {"content": load_topic_map_text(BRANCH_PLAIN)}
-
-
-@app.patch("/api/plain/topic-map")
-async def patch_plain_topic_map(body: PlainTopicMapIn, _=Depends(_auth)):
-    save_topic_map_text(body.content, BRANCH_PLAIN)
-    n = sync_map_file_to_config(BRANCH_PLAIN)
-    append_log("info", f"Lưu plain_topic_map.txt — {n} mapping")
-    return {"ok": True, "content": body.content, "synced": n}
-
-
-@app.post("/api/trigger/{src_chat_id}/{topic_id}")
-async def api_trigger(src_chat_id: int, topic_id: int, _=Depends(_auth)):
-    action = queue_action("run_topic", {
-        "src_chat_id": src_chat_id,
-        "topic_id": topic_id,
-    })
-    append_log("info", f"Web queue: chạy topic {src_chat_id}:{topic_id}")
-    return {"ok": True, "action": action, "message": "Đã xếp hàng — userbot sẽ chạy trong vài giây"}
-
-
-class ActionIn(BaseModel):
-    type: str
-    params: dict = Field(default_factory=dict)
-
-
-@app.get("/api/actions")
-async def api_actions_list(_=Depends(_auth)):
-    return {
-        "pending": list_pending_actions(),
-        "labels": action_labels(),
-        "userbot_ready": api_ready(),
-    }
-
-
-@app.post("/api/actions")
-async def api_actions_run(body: ActionIn, _=Depends(_auth)):
-    allowed = set(action_labels().keys())
-    if body.type not in allowed:
-        raise HTTPException(400, f"Action không hợp lệ. Cho phép: {', '.join(sorted(allowed))}")
-    action = queue_action(body.type, body.params)
-    label = action_labels().get(body.type, body.type)
-    append_log("info", f"Web queue: {label}")
-    msg = (
-        f"Đã xếp hàng: {label}. Userbot xử lý trong ~2s."
-        if api_ready()
-        else f"Đã lưu lệnh '{label}' — restart userbot (có API) để chạy."
-    )
-    return {"ok": True, "action": action, "message": msg}
-
-
-async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
-    out: list[tuple[str, bytes]] = []
-    for f in files:
-        if not f.filename:
-            continue
-        data = await f.read()
-        if data:
-            out.append((f.filename, data))
+    out = dict(plat)
+    out["bots"] = mask_bots_for_api(list_bots_config(out))
+    if out.get("web_token"):
+        out["has_web_token"] = True
+        out["web_token"] = ""
     return out
 
 
-@app.post("/api/import/resync")
-async def import_resync(_=Depends(_auth)):
-    """Đọc lại channels.json + topic_map.txt trên disk → đồng bộ web."""
-    n_ch = rewrite_channels_file(BRANCH_ADS)
-    n_plain = rewrite_channels_file(BRANCH_PLAIN)
-    n_topics = sync_topic_sources_from_map_file()
-    n_plain_topics = sync_map_file_to_config(BRANCH_PLAIN)
-    msg = (
-        f"Đồng bộ lại: {n_ch} kênh ads, {n_plain} kênh Up bài, "
-        f"{n_topics} map ads, {n_plain_topics} map Up bài"
-    )
-    append_log("info", msg)
-    return {
-        "ok": True,
-        "channels": n_ch,
-        "plain_channels": n_plain,
-        "topics": n_topics,
-        "plain_topics": n_plain_topics,
-        "message": msg,
-        "snapshot": _snapshot(),
-    }
+@app.on_event("startup")
+def _startup() -> None:
+    init_db()
 
 
-@app.get("/api/import/scan")
-async def import_scan_disk(_=Depends(_auth)):
-    preview, _, found = scan_workspace()
-    return {
-        "workspace": os.getcwd(),
-        "found_files": found,
-        "preview": preview.to_dict(),
-    }
-
-
-@app.post("/api/import/from-disk")
-async def import_apply_disk(_=Depends(_auth)):
-    try:
-        result = import_from_workspace()
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    msg = (
-        f"Import từ folder: {len(result['applied']['files_written'])} file, "
-        f"{len(result['applied']['global_updated'])} field config, "
-        f"{result['applied']['topics_upserted']} topic map"
-    )
-    append_log("info", msg)
-    result["message"] = msg
-    return result
-
-
-@app.post("/api/import/preview")
-async def import_preview(
-    files: list[UploadFile] = File(...),
-    _=Depends(_auth),
-):
-    uploads = await _read_uploads(files)
-    if not uploads:
-        raise HTTPException(400, "Chưa chọn file")
-    preview, _ = analyze_uploads(uploads)
-    return preview.to_dict()
-
-
-@app.post("/api/import")
-async def import_apply(
-    files: list[UploadFile] = File(...),
-    _=Depends(_auth),
-):
-    uploads = await _read_uploads(files)
-    if not uploads:
-        raise HTTPException(400, "Chưa chọn file")
-    preview, payload = analyze_uploads(uploads)
-    if preview.errors:
-        raise HTTPException(400, "; ".join(preview.errors))
-    applied = apply_import(payload)
-    msg = (
-        f"Import xong: {len(applied['files_written'])} file, "
-        f"{len(applied['global_updated'])} field config, "
-        f"{applied['topics_upserted']} topic map"
-    )
-    append_log("info", msg)
-    return {"ok": True, "preview": preview.to_dict(), "applied": applied, "message": msg}
-
-
-def _mask_platform(cfg: dict) -> dict:
-    from research_platform.config import list_bots_config, mask_bots_for_api
-
-    plat = dict(cfg.get("platform") or {})
-    plat["bots"] = mask_bots_for_api(list_bots_config(plat))
-    bot = dict(plat.get("bot") or {})
-    if bot.get("token"):
-        bot["has_token"] = True
-        bot["token"] = ""
-    plat["bot"] = bot
-    return {"platform": plat}
+@app.get("/", response_class=HTMLResponse)
+async def index_page():
+    path = os.path.join(WEB_DIR, "index.html")
+    with open(path, encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 
 @app.get("/api/platform")
 async def get_platform(_=Depends(_auth)):
-    from research_platform.config import load_platform_config, mask_bots_for_api, list_bots_config
     from research_platform.archive_index import list_days, sync_all_bots_from_config
     from research_platform.bot_manager import bot_status
+    from research_platform.config import load_platform_config
+    from research_platform.run_queue import queue_status
 
     plat = load_platform_config()
     days = []
@@ -1068,69 +127,47 @@ async def get_platform(_=Depends(_auth)):
             days = list_days(limit=60)
         except Exception:
             pass
-    safe = _mask_platform({"platform": plat})["platform"]
     return {
-        "platform": safe,
+        "platform": _mask_platform(plat),
         "days": days,
         "bot_status": bot_status(),
-        "queue": __import__("research_platform.run_queue", fromlist=["queue_status"]).queue_status(),
+        "queue": queue_status(),
     }
 
 
 @app.patch("/api/platform")
-async def patch_platform(body: PlatformIn, _=Depends(_auth)):
-    from research_platform.config import load_platform_config, save_platform_config
+async def patch_platform(body: PlatformPatch, _=Depends(_auth)):
     from research_platform.archive_index import sync_all_bots_from_config
+    from research_platform.config import load_platform_config, save_platform_config
 
     plat = load_platform_config()
     data = body.model_dump(exclude_unset=True)
-    bot_patch = data.pop("bot", None)
     bots_patch = data.pop("bots", None)
     for k, v in data.items():
         plat[k] = v
     if bots_patch is not None:
         merged = []
         existing = plat.get("bots") or []
-        for i, bp in enumerate(bots_patch):
+        for i, bp in enumerate(bots_patch[:10]):
             cur = dict(existing[i]) if i < len(existing) else {}
             token = bp.pop("token", None) if isinstance(bp, dict) else None
             if isinstance(bp, dict):
-                cur.update({k: v for k, v in bp.items() if v is not None or k in bp})
+                cur.update(bp)
             if token:
                 cur["token"] = token
             merged.append(cur)
         plat["bots"] = merged
-        if merged:
-            plat["bot"] = merged[0]
-    elif bot_patch:
-        cur = plat.setdefault("bot", {})
-        token = bot_patch.pop("token", None) if isinstance(bot_patch, dict) else None
-        if isinstance(bot_patch, dict):
-            cur.update({k: v for k, v in bot_patch.items() if v is not None or k in bot_patch})
-        if token:
-            cur["token"] = token
-        bots = plat.get("bots") or []
-        if bots:
-            bots[0] = {**bots[0], **cur}
-        else:
-            plat["bots"] = [cur]
     save_platform_config(plat)
     if plat.get("enabled"):
         sync_all_bots_from_config(plat)
-    append_log("info", "Cập nhật Research Platform config")
-    return {"ok": True, "platform": _mask_platform({"platform": plat})["platform"]}
+    return {"ok": True, "platform": _mask_platform(plat)}
 
 
 @app.post("/api/platform/bots/restart")
 async def platform_restart_bots(username: str | None = None, _=Depends(_auth)):
     from research_platform.bot_manager import restart_bot
 
-    try:
-        r = await restart_bot(username)
-    except Exception as e:
-        raise HTTPException(500, str(e)) from e
-    append_log("info", f"Restart platform bots: {r}")
-    return {"ok": True, **r}
+    return {"ok": True, **await restart_bot(username)}
 
 
 @app.get("/api/platform/vip/plans")
@@ -1142,13 +179,13 @@ async def platform_vip_plans(_=Depends(_auth)):
 @app.post("/api/platform/vip/plans")
 async def platform_vip_plan_create(body: VipPlanIn, _=Depends(_auth)):
     from research_platform.vip import upsert_vip_plan
-    return upsert_vip_plan(None, **body.model_dump())
+    return upsert_vip_plan(None, **body.model_dump(exclude_unset=True))
 
 
 @app.patch("/api/platform/vip/plans/{plan_id}")
 async def platform_vip_plan_patch(plan_id: int, body: VipPlanIn, _=Depends(_auth)):
     from research_platform.vip import upsert_vip_plan
-    return upsert_vip_plan(plan_id, **body.model_dump())
+    return upsert_vip_plan(plan_id, **body.model_dump(exclude_unset=True))
 
 
 @app.post("/api/platform/vip/grant")
@@ -1166,14 +203,7 @@ async def platform_giftcodes(_=Depends(_auth)):
 @app.post("/api/platform/giftcodes")
 async def platform_giftcodes_create(body: GiftCodeIn, _=Depends(_auth)):
     from research_platform.giftcode import create_gift_codes
-    codes = create_gift_codes(
-        plan_id=body.plan_id,
-        count=body.count,
-        prefix=body.prefix,
-        max_uses=body.max_uses,
-        expires_at=body.expires_at,
-        custom_code=body.code,
-    )
+    codes = create_gift_codes(**body.model_dump())
     return {"ok": True, "codes": codes}
 
 
@@ -1186,12 +216,7 @@ async def platform_ads_list(_=Depends(_auth)):
 @app.post("/api/platform/ads")
 async def platform_ads_upsert(body: AdsContractIn, _=Depends(_auth)):
     from research_platform.ads import upsert_ads_contract
-    return upsert_ads_contract(
-        body.alias,
-        src_msg_ids=body.src_msg_ids,
-        src_chat_id=body.src_chat_id,
-        active=body.active,
-    )
+    return upsert_ads_contract(body.alias, src_msg_ids=body.src_msg_ids, src_chat_id=body.src_chat_id, active=body.active)
 
 
 @app.post("/api/platform/ads/{alias}/terminate")
@@ -1257,53 +282,42 @@ async def platform_rollup_list(_=Depends(_auth)):
 async def platform_rollup_run(_=Depends(_auth)):
     from research_platform.rollup import run_rollup_all
     results = await run_rollup_all()
-    append_log("info", f"Rollup chạy: {len(results)} bot")
     return {"ok": True, "results": results}
 
 
 @app.post("/api/platform/days/{day_id}/publish")
 async def platform_publish_day(day_id: int, _=Depends(_auth)):
     from research_platform.archive_index import publish_day
-
     if not publish_day(day_id):
-        raise HTTPException(404, "Không publish được ngày này")
-    append_log("info", f"Publish day {day_id}")
+        raise HTTPException(404, "Không publish được")
     return {"ok": True}
 
 
 @app.post("/api/platform/days/{day_id}/close")
 async def platform_close_day(day_id: int, _=Depends(_auth)):
     from research_platform.archive_index import close_day
-
     if not close_day(day_id):
-        raise HTTPException(404, "Không đóng được ngày này")
-    append_log("info", f"Close day {day_id}")
+        raise HTTPException(404, "Không đóng được")
     return {"ok": True}
 
 
 @app.get("/api/platform/days/{day_id}/items")
 async def platform_day_items(day_id: int, _=Depends(_auth)):
     from research_platform.archive_index import get_day_items
-
     return {"items": get_day_items(day_id, active_ads_only=False)}
 
 
 @app.get("/api/platform/backup")
 async def platform_backup_status(_=Depends(_auth)):
-    """Trạng thái backup — port clender GET /api/backup."""
     from research_platform.backup import get_backup_status
-
     return {"ok": True, "status": get_backup_status()}
 
 
 @app.post("/api/platform/backup")
 async def platform_backup_run(body: dict | None = Body(default=None), _=Depends(_auth)):
-    """Chạy backup ngay — port clender POST /api/backup."""
     from research_platform.backup import run_backup_now
-
     send_tg = (body or {}).get("telegram") if body else None
     result = run_backup_now(send_telegram=send_tg)
-    append_log("info", f"Backup run: ok={result.get('ok')} tg={result.get('sent_telegram')}")
     if not result.get("ok"):
         raise HTTPException(500, "Backup thất bại")
     return result
@@ -1312,12 +326,20 @@ async def platform_backup_run(body: dict | None = Body(default=None), _=Depends(
 @app.get("/api/platform/backup/download")
 async def platform_backup_download(_=Depends(_auth)):
     from research_platform.backup import build_backup_zip
-
     data, filename = build_backup_zip()
-    append_log("info", f"Backup ZIP download {filename}")
     return Response(
         content=data,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
+def run_server() -> None:
+    import uvicorn
+    cfg = load_auto_config()
+    port = int((cfg.get("platform") or {}).get("web_port") or 8080)
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    run_server()

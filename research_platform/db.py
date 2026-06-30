@@ -1,4 +1,4 @@
-"""SQLite schema cho Research Platform."""
+"""SQLite schema — Research Platform."""
 
 from __future__ import annotations
 
@@ -23,9 +23,6 @@ CREATE TABLE IF NOT EXISTS bots (
     catalog_topic_id INTEGER,
     branch TEXT DEFAULT 'ads',
     enabled INTEGER DEFAULT 1,
-    publish_channels INTEGER DEFAULT 1,
-    archive_index INTEGER DEFAULT 1,
-    bot_delivery INTEGER DEFAULT 1,
     queue_order INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
 );
@@ -38,7 +35,6 @@ CREATE TABLE IF NOT EXISTS days (
     status TEXT DEFAULT 'draft',
     runs_count INTEGER DEFAULT 0,
     channel_first INTEGER DEFAULT 1,
-    next_src_msg_id INTEGER,
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(bot_id, date_vn),
     FOREIGN KEY (bot_id) REFERENCES bots(id)
@@ -64,7 +60,6 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT DEFAULT '',
     first_name TEXT DEFAULT '',
     joined_at TEXT DEFAULT (datetime('now')),
-    language_code TEXT DEFAULT '',
     tier TEXT DEFAULT '',
     vip_until TEXT,
     spam_ban_until TEXT,
@@ -118,42 +113,6 @@ CREATE TABLE IF NOT EXISTS gift_redeems (
     PRIMARY KEY (code, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS purchases (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    plan_id INTEGER,
-    source TEXT DEFAULT 'stars',
-    amount_stars INTEGER DEFAULT 0,
-    gift_code TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS media_sets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bot_id INTEGER,
-    name TEXT NOT NULL,
-    name_norm TEXT NOT NULL,
-    day_id INTEGER,
-    item_ids TEXT DEFAULT '[]',
-    status TEXT DEFAULT 'approved',
-    contributor_user_id INTEGER,
-    approved_by TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (day_id) REFERENCES days(id)
-);
-
-CREATE TABLE IF NOT EXISTS contribution_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bot_id INTEGER,
-    user_id INTEGER NOT NULL,
-    src_chat_id INTEGER,
-    msg_ids TEXT DEFAULT '[]',
-    proposed_name TEXT,
-    status TEXT DEFAULT 'pending',
-    admin_msg_id INTEGER,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
 CREATE TABLE IF NOT EXISTS share_refs (
     ref_code TEXT PRIMARY KEY,
     day_id INTEGER,
@@ -170,6 +129,15 @@ CREATE TABLE IF NOT EXISTS share_clicks (
     PRIMARY KEY (ref_code, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS contribution_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id INTEGER,
+    user_id INTEGER NOT NULL,
+    proposed_name TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS rollup_indexes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bot_id INTEGER NOT NULL,
@@ -183,25 +151,12 @@ CREATE TABLE IF NOT EXISTS rollup_indexes (
 
 CREATE INDEX IF NOT EXISTS idx_days_bot_date ON days(bot_id, date_vn);
 CREATE INDEX IF NOT EXISTS idx_day_items_day ON day_items(day_id, seq);
-CREATE INDEX IF NOT EXISTS idx_media_sets_norm ON media_sets(name_norm);
-CREATE INDEX IF NOT EXISTS idx_users_ref ON users(ref_code);
 """
-
-_MIGRATIONS = [
-    "ALTER TABLE bots ADD COLUMN queue_order INTEGER DEFAULT 0",
-    "ALTER TABLE ads_contracts ADD COLUMN src_chat_id INTEGER",
-    "ALTER TABLE ads_contracts ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))",
-    "ALTER TABLE users ADD COLUMN ref_code TEXT",
-]
-
-
-def _ensure_dir() -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
 
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    _ensure_dir()
+    os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -215,44 +170,26 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def _run_migrations(conn: sqlite3.Connection) -> None:
-    for sql in _MIGRATIONS:
-        try:
-            conn.execute(sql)
-        except sqlite3.OperationalError:
-            pass
-
-
-def _seed_vip_plans(conn: sqlite3.Connection) -> None:
-    row = conn.execute("SELECT COUNT(*) AS c FROM vip_plans").fetchone()
-    if row and row["c"] > 0:
-        return
-    defaults = [
-        ("day", "VIP 1 ngày", 50, 1, 1),
-        ("month", "VIP 1 tháng", 500, 30, 2),
-        ("year", "VIP 1 năm", 4000, 365, 3),
-        ("lifetime", "VIP vĩnh viễn", 10000, None, 4),
-    ]
-    for pt, name, stars, days, order in defaults:
-        conn.execute(
-            """INSERT INTO vip_plans (plan_type, name, stars_price, duration_days, enabled, sort_order)
-               VALUES (?,?,?,?,1,?)""",
-            (pt, name, stars, days, order),
-        )
-
-
 def init_db() -> None:
     with _lock:
         with connect() as conn:
             conn.executescript(_SCHEMA)
-            _run_migrations(conn)
-            _seed_vip_plans(conn)
+            row = conn.execute("SELECT COUNT(*) AS c FROM vip_plans").fetchone()
+            if row and row["c"] == 0:
+                for pt, name, stars, days, order in [
+                    ("day", "VIP 1 ngày", 50, 1, 1),
+                    ("month", "VIP 1 tháng", 500, 30, 2),
+                    ("year", "VIP 1 năm", 4000, 365, 3),
+                    ("lifetime", "VIP vĩnh viễn", 10000, None, 4),
+                ]:
+                    conn.execute(
+                        "INSERT INTO vip_plans (plan_type,name,stars_price,duration_days,enabled,sort_order) VALUES (?,?,?,?,1,?)",
+                        (pt, name, stars, days, order),
+                    )
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
-    if row is None:
-        return None
-    return dict(row)
+    return dict(row) if row else None
 
 
 def json_loads(text: str | None, default=None):
@@ -260,7 +197,7 @@ def json_loads(text: str | None, default=None):
         return default if default is not None else []
     try:
         return json.loads(text)
-    except Exception:
+    except json.JSONDecodeError:
         return default if default is not None else []
 
 
