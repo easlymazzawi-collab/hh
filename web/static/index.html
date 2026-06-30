@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Research Platform Admin</title>
+  <style>
+    :root {
+      --bg: #0c0f14;
+      --sidebar: #121820;
+      --card: #171d28;
+      --border: #2a3444;
+      --text: #e8edf5;
+      --muted: #8b97ab;
+      --accent: #4f8cff;
+      --accent-dim: #2a4a8a;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+    }
+    aside {
+      width: 240px;
+      background: var(--sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .brand {
+      padding: 1.25rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand h1 { font-size: 1rem; font-weight: 700; }
+    .brand p { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; }
+    nav { flex: 1; padding: 0.75rem 0.5rem; overflow-y: auto; }
+    nav button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: none;
+      color: var(--muted);
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      margin-bottom: 2px;
+    }
+    nav button:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+    nav button.active { background: var(--accent-dim); color: #fff; font-weight: 600; }
+    .auth-box {
+      padding: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .auth-box label { font-size: 0.7rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+    .auth-box input {
+      width: 100%;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.8rem;
+    }
+    main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    header h2 { font-size: 1.1rem; }
+    .status-pill {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      background: #1a2e1a;
+      color: var(--ok);
+    }
+    .status-pill.off { background: #2a1a1a; color: var(--danger); }
+    .content { padding: 1.5rem; overflow-y: auto; flex: 1; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .card h3 { font-size: 0.95rem; margin-bottom: 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; }
+    .field label { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.3rem; }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      padding: 0.5rem 0.7rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.875rem;
+    }
+    .field textarea { min-height: 70px; resize: vertical; }
+    .check-row { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0.75rem 0; }
+    .check-row label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; cursor: pointer; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.danger { border-color: var(--danger); color: var(--danger); }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.55rem 0.5rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+    .badge.draft { background: #2a2a1a; color: var(--warn); }
+    .badge.published { background: #1a2e1a; color: var(--ok); }
+    .badge.closed { background: #2a1a2a; color: var(--muted); }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
+    .stat .val { font-size: 1.4rem; font-weight: 700; }
+    .stat .lbl { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; line-height: 1.5; }
+    .bot-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      background: var(--bg);
+    }
+    .bot-card h4 { font-size: 0.85rem; margin-bottom: 0.75rem; color: var(--muted); }
+    .toast {
+      position: fixed; bottom: 1.25rem; right: 1.25rem;
+      background: var(--ok); color: #fff;
+      padding: 0.75rem 1.1rem; border-radius: 8px;
+      font-size: 0.875rem; display: none; z-index: 100;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+    .empty { color: var(--muted); font-size: 0.875rem; padding: 1rem 0; }
+    @media (max-width: 768px) {
+      body { flex-direction: column; }
+      aside { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+      nav { display: flex; flex-wrap: wrap; gap: 0.25rem; padding: 0.5rem; }
+      nav button { width: auto; }
+    }
+  </style>
+</head>
+<body>
+  <aside>
+    <div class="brand">
+      <h1>Research Platform</h1>
+      <p>UpBain v2 — Admin</p>
+    </div>
+    <nav id="nav">
+      <button class="active" data-page="home">Trang chủ</button>
+      <button data-page="config">Cấu hình</button>
+      <button data-page="bots">Bots (10)</button>
+      <button data-page="archive">Archive</button>
+      <button data-page="vip">VIP &amp; Stars</button>
+      <button data-page="gift">Giftcode</button>
+      <button data-page="ads">Ads</button>
+      <button data-page="share">Share</button>
+      <button data-page="users">Users</button>
+      <button data-page="backup">Backup</button>
+    </nav>
+    <div class="auth-box">
+      <label>Web token (nếu có)</label>
+      <input id="web-token" type="password" placeholder="X-Token header" />
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <h2 id="page-title">Trang chủ</h2>
+      <span id="platform-status" class="status-pill off">Platform OFF</span>
+    </header>
+
+    <div class="content">
+      <!-- HOME -->
+      <section id="page-home" class="page active">
+        <div class="stat-grid">
+          <div class="stat"><div class="val" id="st-bots">0</div><div class="lbl">Bots cấu hình</div></div>
+          <div class="stat"><div class="val" id="st-days">0</div><div class="lbl">Ngày archive</div></div>
+          <div class="stat"><div class="val" id="st-queue">0/10</div><div class="lbl">Queue</div></div>
+          <div class="stat"><div class="val" id="st-backup">—</div><div class="lbl">Backup gần nhất</div></div>
+        </div>
+        <div class="card">
+          <h3>Điều khiển nhanh</h3>
+          <p class="hint">3 lớp ON/OFF: Up kênh · Archive index · Bot delivery. Bật platform trong tab Cấu hình.</p>
+          <div class="btn-row">
+            <button class="btn primary" onclick="goPage('config')">Mở cấu hình</button>
+            <button class="btn" onclick="restartBots()">Restart all bots</button>
+            <button class="btn" onclick="runBackup()">Backup ngay</button>
+            <button class="btn" onclick="recheckAds()">Recheck ads</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Trạng thái bot</h3>
+          <div id="home-bot-status" class="empty">Đang tải...</div>
+        </div>
+      </section>
+
+      <!-- CONFIG -->
+      <section id="page-config" class="page">
+        <div class="card">
+          <h3>Platform</h3>
+          <div class="check-row">
+            <label><input type="checkbox" id="cfg-enabled" /> Bật Research Platform</label>
+            <label><input type="checkbox" id="cfg-publish" /> Up kênh</label>
+            <label><input type="checkbox" id="cfg-index" /> Archive index</label>
+            <label><input type="checkbox" id="cfg-delivery" /> Bot delivery</label>
+            <label><input type="checkbox" id="cfg-vip-req" /> Bắt buộc VIP</label>
+            <label><input type="checkbox" id="cfg-share" /> Đua top share</label>
+            <label><input type="checkbox" id="cfg-backup-tg" /> Backup lên Telegram</label>
+          </div>
+          <div class="grid">
+            <div class="field"><label>Delay gửi (giây)</label><input id="cfg-delay" type="number" step="0.5" min="0.5" value="1" /></div>
+            <div class="field"><label>Notify group ID</label><input id="cfg-notify" type="number" /></div>
+            <div class="field"><label>Admin forum ID</label><input id="cfg-admin-forum" type="number" /></div>
+            <div class="field"><label>Topic ZIP</label><input id="cfg-zip-topic" type="number" /></div>
+            <div class="field"><label>Topic duyệt tên</label><input id="cfg-contrib" type="number" /></div>
+            <div class="field"><label>Membership channel ID</label><input id="cfg-mem-id" type="number" /></div>
+            <div class="field"><label>@channel username</label><input id="cfg-mem-un" placeholder="mychannel" /></div>
+            <div class="field"><label>Check membership (giây)</label><input id="cfg-mem-sec" type="number" value="300" /></div>
+            <div class="field"><label>Backup forum ID</label><input id="cfg-backup-forum" type="number" /></div>
+            <div class="field"><label>Interval (giờ)</label><input id="cfg-backup-h" type="number" value="24" /></div>
+            <div class="field"><label>Giữ (ngày)</label><input id="cfg-backup-keep" type="number" value="7" /></div>
+            <div class="field"><label>Web port</label><input id="cfg-port" type="number" value="8080" /></div>
+          </div>
+          <div class="field" style="margin-top:0.5rem">
+            <label>Force-join message</label>
+            <textarea id="cfg-mem-msg"></textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" onclick="saveConfig()">Lưu cấu hình</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- BOTS -->
+      <section id="page-bots" class="page">
+        <div class="card">
+          <h3>Bots (tối đa 10)</h3>
+          <p class="hint">Mỗi bot = 1 nguồn forum/topic. Queue tuần tự theo queue_order.</p>
+          <div id="bots-list"></div>
+          <div class="btn-row">
+            <button class="btn" onclick="addBot()">+ Thêm bot</button>
+            <button class="btn primary" onclick="saveBots()">Lưu bots</button>
+            <button class="btn" onclick="restartBots()">Restart all</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ARCHIVE -->
+      <section id="page-archive" class="page">
+        <div class="card">
+          <h3>Archive ngày</h3>
+          <p class="hint">Index = link + metadata SQLite. Publish để bot trả user.</p>
+          <div id="days-table" class="empty">Chưa có ngày.</div>
+        </div>
+      </section>
+
+      <!-- VIP -->
+      <section id="page-vip" class="page">
+        <div class="card">
+          <h3>VIP Plans</h3>
+          <div id="vip-plans"></div>
+        </div>
+        <div class="card">
+          <h3>Gán VIP tay</h3>
+          <div class="grid">
+            <div class="field"><label>User Telegram ID</label><input id="vip-uid" type="number" /></div>
+            <div class="field"><label>Plan ID</label><input id="vip-planid" type="number" value="1" /></div>
+          </div>
+          <button class="btn primary" onclick="grantVip()">Gán VIP</button>
+        </div>
+      </section>
+
+      <!-- GIFT -->
+      <section id="page-gift" class="page">
+        <div class="card">
+          <h3>Tạo giftcode</h3>
+          <div class="grid">
+            <div class="field"><label>Plan ID</label><input id="gift-plan" type="number" value="1" /></div>
+            <div class="field"><label>Số lượng</label><input id="gift-count" type="number" value="5" /></div>
+            <div class="field"><label>Prefix</label><input id="gift-prefix" value="VIP" /></div>
+          </div>
+          <button class="btn primary" onclick="createGifts()">Tạo</button>
+          <div id="gift-result" style="margin-top:1rem"></div>
+        </div>
+        <div class="card">
+          <h3>Danh sách</h3>
+          <div id="gift-list"></div>
+        </div>
+      </section>
+
+      <!-- ADS -->
+      <section id="page-ads" class="page">
+        <div class="card">
+          <h3>Ads alias</h3>
+          <div class="grid">
+            <div class="field"><label>Alias</label><input id="ads-alias" /></div>
+            <div class="field"><label>Msg IDs (csv)</label><input id="ads-ids" placeholder="123,456" /></div>
+            <div class="field"><label>Chat ID</label><input id="ads-chat" type="number" /></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" onclick="saveAds()">Lưu alias</button>
+            <button class="btn" onclick="recheckAds()">Recheck all</button>
+          </div>
+          <div id="ads-list" style="margin-top:1rem"></div>
+        </div>
+      </section>
+
+      <!-- SHARE -->
+      <section id="page-share" class="page">
+        <div class="card">
+          <h3>Share leaderboard</h3>
+          <div id="share-lb" class="empty">Chưa có dữ liệu.</div>
+        </div>
+      </section>
+
+      <!-- USERS -->
+      <section id="page-users" class="page">
+        <div class="card">
+          <h3>Users</h3>
+          <div id="users-table" class="empty">Chưa có user.</div>
+        </div>
+      </section>
+
+      <!-- BACKUP -->
+      <section id="page-backup" class="page">
+        <div class="card">
+          <h3>Backup</h3>
+          <p class="hint">ZIP: platform.db + auto_config.json (token masked) + archive_index.json + bots.json + MANIFEST</p>
+          <div id="backup-status" class="empty">Đang tải...</div>
+          <div class="btn-row">
+            <button class="btn primary" onclick="runBackup()">Backup ngay</button>
+            <button class="btn" onclick="downloadBackup()">Tải ZIP</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const PAGE_TITLES = {
+      home: "Trang chủ", config: "Cấu hình", bots: "Bots (10)",
+      archive: "Archive", vip: "VIP & Stars", gift: "Giftcode",
+      ads: "Ads", share: "Share", users: "Users", backup: "Backup"
+    };
+    let state = { platform: {}, days: [], bot_status: [], queue: {} };
+    let botsDraft = [];
+
+    function headers() {
+      const t = $("web-token").value.trim();
+      const h = { "Content-Type": "application/json" };
+      if (t) h["X-Token"] = t;
+      return h;
+    }
+
+    function toast(msg, ok = true) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.style.background = ok ? "var(--ok)" : "var(--danger)";
+      el.style.display = "block";
+      setTimeout(() => el.style.display = "none", 2800);
+    }
+
+    async function api(path, opts = {}) {
+      const r = await fetch("/api/platform" + path, { headers: headers(), ...opts });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || `HTTP ${r.status}`);
+      }
+      return r.json();
+    }
+
+    function goPage(name) {
+      document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+      document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+      $("page-" + name)?.classList.add("active");
+      document.querySelector(`nav button[data-page="${name}"]`)?.classList.add("active");
+      $("page-title").textContent = PAGE_TITLES[name] || name;
+      if (name === "gift") loadGifts();
+      if (name === "ads") loadAds();
+      if (name === "share") loadShare();
+      if (name === "users") loadUsers();
+      if (name === "vip") loadVipPlans();
+      if (name === "backup") loadBackupStatus();
+    }
+
+    document.getElementById("nav").addEventListener("click", e => {
+      const btn = e.target.closest("button[data-page]");
+      if (btn) goPage(btn.dataset.page);
+    });
+
+    function statusBadge(s) {
+      const cls = { draft: "draft", published: "published", closed: "closed" }[s] || "draft";
+      return `<span class="badge ${cls}">${s}</span>`;
+    }
+
+    function fillConfig(p) {
+      $("cfg-enabled").checked = !!p.enabled;
+      $("cfg-publish").checked = p.publish_channels !== false;
+      $("cfg-index").checked = p.archive_index !== false;
+      $("cfg-delivery").checked = p.bot_delivery !== false;
+      $("cfg-vip-req").checked = !!p.require_vip_for_archive;
+      $("cfg-share").checked = !!(p.share_event || {}).enabled;
+      $("cfg-backup-tg").checked = p.backup_to_telegram !== false;
+      $("cfg-delay").value = p.delivery_delay_sec ?? 1;
+      $("cfg-notify").value = p.admin_notify_group_id ?? "";
+      $("cfg-admin-forum").value = p.admin_forum_id ?? "";
+      $("cfg-zip-topic").value = p.admin_zip_topic_id ?? "";
+      $("cfg-contrib").value = p.admin_contrib_topic_id ?? "";
+      $("cfg-mem-id").value = p.membership_channel_id ?? "";
+      $("cfg-mem-un").value = p.membership_channel_username ?? "";
+      $("cfg-mem-sec").value = p.force_join_check_sec ?? 300;
+      $("cfg-backup-forum").value = p.backup_forum_id ?? "";
+      $("cfg-backup-h").value = p.backup_interval_hours ?? 24;
+      $("cfg-backup-keep").value = p.backup_keep_days ?? 7;
+      $("cfg-port").value = p.web_port ?? 8080;
+      $("cfg-mem-msg").value = p.force_join_message ?? "";
+    }
+
+    function collectConfig() {
+      return {
+        enabled: $("cfg-enabled").checked,
+        publish_channels: $("cfg-publish").checked,
+        archive_index: $("cfg-index").checked,
+        bot_delivery: $("cfg-delivery").checked,
+        require_vip_for_archive: $("cfg-vip-req").checked,
+        delivery_delay_sec: parseFloat($("cfg-delay").value) || 1,
+        admin_notify_group_id: numOrNull($("cfg-notify").value),
+        admin_forum_id: numOrNull($("cfg-admin-forum").value),
+        admin_zip_topic_id: numOrNull($("cfg-zip-topic").value),
+        admin_contrib_topic_id: numOrNull($("cfg-contrib").value),
+        membership_channel_id: numOrNull($("cfg-mem-id").value),
+        membership_channel_username: $("cfg-mem-un").value.trim(),
+        force_join_check_sec: parseInt($("cfg-mem-sec").value) || 300,
+        force_join_message: $("cfg-mem-msg").value,
+        backup_forum_id: numOrNull($("cfg-backup-forum").value),
+        backup_to_telegram: $("cfg-backup-tg").checked,
+        backup_interval_hours: parseInt($("cfg-backup-h").value) || 24,
+        backup_keep_days: parseInt($("cfg-backup-keep").value) || 7,
+        web_port: parseInt($("cfg-port").value) || 8080,
+        share_event: { enabled: $("cfg-share").checked },
+        bots: botsDraft,
+      };
+    }
+
+    function numOrNull(v) {
+      const n = parseInt(v);
+      return isNaN(n) ? null : n;
+    }
+
+    function renderBots() {
+      const el = $("bots-list");
+      if (!botsDraft.length) {
+        el.innerHTML = '<p class="empty">Chưa có bot. Bấm + Thêm bot.</p>';
+        return;
+      }
+      el.innerHTML = botsDraft.map((b, i) => `
+        <div class="bot-card" data-idx="${i}">
+          <h4>Bot #${i + 1} ${b.username ? "(@" + b.username + ")" : ""}</h4>
+          <div class="grid">
+            <div class="field"><label>Token</label><input type="password" data-f="token" value="${b.has_token ? "" : (b.token || "")}" placeholder="${b.has_token ? "(đã lưu)" : "123:ABC..."}" /></div>
+            <div class="field"><label>@username</label><input data-f="username" value="${esc(b.username)}" /></div>
+            <div class="field"><label>Forum nguồn ID</label><input data-f="source_forum_id" type="number" value="${b.source_forum_id ?? ""}" /></div>
+            <div class="field"><label>Topic nguồn ID</label><input data-f="source_topic_id" type="number" value="${b.source_topic_id ?? ""}" /></div>
+            <div class="field"><label>Catalog topic ID</label><input data-f="catalog_topic_id" type="number" value="${b.catalog_topic_id ?? ""}" /></div>
+            <div class="field"><label>Branch</label>
+              <select data-f="branch"><option value="ads" ${b.branch !== "plain" ? "selected" : ""}>ads</option><option value="plain" ${b.branch === "plain" ? "selected" : ""}>plain</option></select>
+            </div>
+            <div class="field"><label>Queue order</label><input data-f="queue_order" type="number" value="${b.queue_order ?? i}" /></div>
+            <div class="field"><label>Enabled</label>
+              <select data-f="enabled"><option value="1" ${b.enabled !== false ? "selected" : ""}>ON</option><option value="0" ${b.enabled === false ? "selected" : ""}>OFF</option></select>
+            </div>
+          </div>
+          <button class="btn danger" onclick="removeBot(${i})">Xóa</button>
+        </div>
+      `).join("");
+      el.querySelectorAll(".bot-card").forEach(card => {
+        card.querySelectorAll("[data-f]").forEach(inp => {
+          inp.addEventListener("change", () => syncBotDraft(card));
+        });
+      });
+    }
+
+    function syncBotDraft(card) {
+      const i = parseInt(card.dataset.idx);
+      const b = { ...botsDraft[i] };
+      card.querySelectorAll("[data-f]").forEach(inp => {
+        const f = inp.dataset.f;
+        let v = inp.value;
+        if (["source_forum_id","source_topic_id","catalog_topic_id","queue_order"].includes(f)) v = numOrNull(v);
+        if (f === "enabled") v = inp.value === "1";
+        if (f === "token" && !v && b.has_token) return;
+        b[f] = v;
+      });
+      botsDraft[i] = b;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+    }
+
+    function addBot() {
+      if (botsDraft.length >= 10) { toast("Tối đa 10 bot", false); return; }
+      botsDraft.push({ branch: "ads", enabled: true, queue_order: botsDraft.length });
+      renderBots();
+    }
+
+    function removeBot(i) {
+      botsDraft.splice(i, 1);
+      renderBots();
+    }
+
+    function renderDays() {
+      const days = state.days || [];
+      if (!days.length) { $("days-table").innerHTML = '<p class="empty">Chưa có ngày.</p>'; return; }
+      $("days-table").innerHTML = `<table>
+        <thead><tr><th>Ngày</th><th>Bot</th><th>Topic</th><th>Status</th><th></th></tr></thead>
+        <tbody>${days.map(d => `<tr>
+          <td>${esc(d.date_vn)}</td>
+          <td>${esc(d.bot_username || d.bot_id)}</td>
+          <td>${esc(d.topic_label)}</td>
+          <td>${statusBadge(d.status)}</td>
+          <td>
+            ${d.status !== "published" ? `<button class="btn" onclick="publishDay(${d.id})">Publish</button>` : ""}
+            ${d.status !== "closed" ? `<button class="btn danger" onclick="closeDay(${d.id})">Close</button>` : ""}
+          </td>
+        </tr>`).join("")}</tbody></table>`;
+    }
+
+    function renderHome() {
+      const p = state.platform || {};
+      const pill = $("platform-status");
+      pill.textContent = p.enabled ? "Platform ON" : "Platform OFF";
+      pill.className = "status-pill" + (p.enabled ? "" : " off");
+      $("st-bots").textContent = (p.bots || []).length;
+      $("st-days").textContent = (state.days || []).length;
+      $("st-queue").textContent = `${(state.queue || {}).total || 0}/10`;
+      const bs = state.bot_status || [];
+      $("home-bot-status").innerHTML = bs.length
+        ? `<table><thead><tr><th>Bot</th><th>Queue</th><th>Running</th></tr></thead><tbody>
+          ${bs.map(b => `<tr><td>@${esc(b.username)}</td><td>${b.queue_order}</td><td>${b.running ? "✓" : "—"}</td></tr>`).join("")}
+          </tbody></table>`
+        : '<p class="empty">Chưa cấu hình bot.</p>';
+    }
+
+    async function refresh() {
+      try {
+        const data = await api("");
+        state = data;
+        botsDraft = JSON.parse(JSON.stringify(data.platform?.bots || []));
+        fillConfig(data.platform || {});
+        renderBots();
+        renderDays();
+        renderHome();
+      } catch (e) {
+        toast("Lỗi tải: " + e.message, false);
+      }
+    }
+
+    async function saveConfig() {
+      document.querySelectorAll(".bot-card").forEach(syncBotDraft);
+      try {
+        await api("", { method: "PATCH", body: JSON.stringify(collectConfig()) });
+        toast("Đã lưu cấu hình");
+        await refresh();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function saveBots() {
+      document.querySelectorAll(".bot-card").forEach(syncBotDraft);
+      try {
+        await api("", { method: "PATCH", body: JSON.stringify({ bots: botsDraft }) });
+        toast("Đã lưu bots");
+        await refresh();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function restartBots() {
+      try {
+        const r = await api("/bots/restart", { method: "POST" });
+        toast("Restart: " + (r.restarted || []).join(", "));
+        await refresh();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function publishDay(id) {
+      try { await api(`/days/${id}/publish`, { method: "POST" }); toast("Published"); await refresh(); }
+      catch (e) { toast(e.message, false); }
+    }
+
+    async function closeDay(id) {
+      try { await api(`/days/${id}/close`, { method: "POST" }); toast("Closed"); await refresh(); }
+      catch (e) { toast(e.message, false); }
+    }
+
+    async function loadVipPlans() {
+      try {
+        const r = await fetch("/api/platform/vip/plans", { headers: headers() }).then(r => r.json());
+        $("vip-plans").innerHTML = `<table><thead><tr><th>ID</th><th>Tên</th><th>Stars</th><th>Ngày</th></tr></thead><tbody>
+          ${(r.plans||[]).map(p => `<tr><td>${p.id}</td><td>${esc(p.name)}</td><td>${p.stars_price}</td><td>${p.duration_days ?? "∞"}</td></tr>`).join("")}
+        </tbody></table>`;
+      } catch (e) { $("vip-plans").textContent = e.message; }
+    }
+
+    async function grantVip() {
+      try {
+        await fetch("/api/platform/vip/grant", {
+          method: "POST", headers: headers(),
+          body: JSON.stringify({ user_id: parseInt($("vip-uid").value), plan_id: parseInt($("vip-planid").value) })
+        });
+        toast("Đã gán VIP");
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function createGifts() {
+      try {
+        const r = await fetch("/api/platform/giftcodes", {
+          method: "POST", headers: headers(),
+          body: JSON.stringify({ plan_id: +$("gift-plan").value, count: +$("gift-count").value, prefix: $("gift-prefix").value })
+        }).then(r => r.json());
+        $("gift-result").innerHTML = `<p>Mã mới: <code>${(r.codes||[]).join(", ")}</code></p>`;
+        toast("Tạo giftcode OK");
+        loadGifts();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function loadGifts() {
+      try {
+        const r = await fetch("/api/platform/giftcodes", { headers: headers() }).then(r => r.json());
+        $("gift-list").innerHTML = (r.codes||[]).length
+          ? `<table><thead><tr><th>Code</th><th>Plan</th><th>Used</th></tr></thead><tbody>
+            ${r.codes.map(c => `<tr><td>${esc(c.code)}</td><td>${c.plan_id}</td><td>${c.used_count}/${c.max_uses}</td></tr>`).join("")}
+            </tbody></table>` : '<p class="empty">Chưa có.</p>';
+      } catch (e) { $("gift-list").textContent = e.message; }
+    }
+
+    async function saveAds() {
+      const ids = $("ads-ids").value.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+      try {
+        await fetch("/api/platform/ads", {
+          method: "POST", headers: headers(),
+          body: JSON.stringify({ alias: $("ads-alias").value.trim(), src_msg_ids: ids, src_chat_id: numOrNull($("ads-chat").value) })
+        });
+        toast("Lưu ads OK");
+        loadAds();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function loadAds() {
+      try {
+        const r = await fetch("/api/platform/ads", { headers: headers() }).then(r => r.json());
+        $("ads-list").innerHTML = (r.contracts||[]).length
+          ? `<table><thead><tr><th>Alias</th><th>Active</th><th></th></tr></thead><tbody>
+            ${r.contracts.map(c => `<tr><td>${esc(c.alias)}</td><td>${c.active ? "✓" : "✗"}</td>
+              <td>${c.active ? `<button class="btn danger" onclick="terminateAds('${esc(c.alias)}')">Terminate</button>` : ""}</td></tr>`).join("")}
+            </tbody></table>` : '<p class="empty">Chưa có alias.</p>';
+      } catch (e) { $("ads-list").textContent = e.message; }
+    }
+
+    async function terminateAds(alias) {
+      try {
+        await fetch(`/api/platform/ads/${encodeURIComponent(alias)}/terminate`, { method: "POST", headers: headers() });
+        toast("Đã terminate");
+        loadAds();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function recheckAds() {
+      try {
+        const r = await fetch("/api/platform/ads/recheck", { method: "POST", headers: headers() }).then(r => r.json());
+        toast(`Recheck: ${r.checked} alias`);
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function loadShare() {
+      try {
+        const r = await fetch("/api/platform/share/leaderboard", { headers: headers() }).then(r => r.json());
+        const lb = r.leaderboard || [];
+        $("share-lb").innerHTML = lb.length
+          ? `<table><thead><tr><th>#</th><th>Ref</th><th>Clicks</th></tr></thead><tbody>
+            ${lb.map((x,i) => `<tr><td>${i+1}</td><td>${esc(x.ref_code)}</td><td>${x.click_count}</td></tr>`).join("")}
+            </tbody></table>` : '<p class="empty">Chưa có dữ liệu.</p>';
+      } catch (e) { $("share-lb").textContent = e.message; }
+    }
+
+    async function loadUsers() {
+      try {
+        const r = await fetch("/api/platform/users", { headers: headers() }).then(r => r.json());
+        const u = r.users || [];
+        $("users-table").innerHTML = u.length
+          ? `<table><thead><tr><th>ID</th><th>Username</th><th>VIP</th></tr></thead><tbody>
+            ${u.map(x => `<tr><td>${x.telegram_id}</td><td>@${esc(x.username)}</td><td>${x.is_vip ? "✓" : "—"}</td></tr>`).join("")}
+            </tbody></table>` : '<p class="empty">Chưa có user.</p>';
+      } catch (e) { $("users-table").textContent = e.message; }
+    }
+
+    async function loadBackupStatus() {
+      try {
+        const r = await fetch("/api/platform/backup", { headers: headers() }).then(r => r.json());
+        const s = r.status || {};
+        $("backup-status").innerHTML = `
+          <p>Scheduler: ${s.scheduler_on ? "ON" : "OFF"} · Interval: ${s.interval_hours}h · Giữ: ${s.keep_days} ngày</p>
+          <p>File local: ${s.local_file_count} · DB: ${s.db_exists ? "OK" : "missing"}</p>
+          <p>Telegram: ${s.telegram_ready ? "sẵn sàng" : (s.skip_reasons || []).join(", ")}</p>`;
+        $("st-backup").textContent = s.last_backup_file ? s.last_backup_file.slice(0, 12) : "—";
+      } catch (e) { $("backup-status").textContent = e.message; }
+    }
+
+    async function runBackup() {
+      try {
+        const r = await fetch("/api/platform/backup", { method: "POST", headers: headers(), body: "{}" }).then(r => r.json());
+        toast("Backup: " + (r.file || "OK"));
+        loadBackupStatus();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    async function downloadBackup() {
+      try {
+        const r = await fetch("/api/platform/backup/download", { headers: headers() });
+        const blob = await r.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "backup.zip";
+        a.click();
+      } catch (e) { toast(e.message, false); }
+    }
+
+    refresh();
+    setInterval(refresh, 15000);
+  </script>
+</body>
+</html>
